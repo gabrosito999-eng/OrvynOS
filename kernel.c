@@ -1,100 +1,74 @@
-static inline unsigned char inb(unsigned short p){unsigned char r; __asm__ volatile("inb %1,%0":"=a"(r):"Nd"(p)); return r;}
-static inline void outb(unsigned short p, unsigned char v){__asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p));}
-
-char* vga = (char*)0xB8000;
-int cursor=0;
-int color=0x07;
-
-void scroll(){
- if(cursor<80*25) return;
- for(int i=0;i<80*24;i++){vga[i*2]=vga[(i+80)*2]; vga[i*2+1]=vga[(i+80)*2+1];}
- for(int i=80*24;i<80*25;i++){vga[i*2]=' '; vga[i*2+1]=color;}
- cursor=80*24;
+typedef unsigned char u8; typedef unsigned short u16; typedef unsigned int u32; typedef unsigned long long u64;
+static inline void outl(u16 p, u32 v){ __asm__ volatile("outl %0,%1"::"a"(v),"Nd"(p)); }
+static inline u32 inl(u16 p){ u32 r; __asm__ volatile("inl %1,%0":"=a"(r):"Nd"(p)); return r; }
+void print(char* s,int y,u8 c){ char* v=(char*)0xB8000; int pos=y*80; for(int i=0;s[i];i++){ v[pos*2]=s[i]; v[pos*2+1]=c; pos++; } }
+u16 checksum(u8* d,int l){ u32 s=0; for(int i=0;i<l;i+=2) s+=(d[i]<<8)+(i+1<l?d[i+1]:0); while(s>>16) s=(s&0xFFFF)+(s>>16); return ~s&0xFFFF; }
+struct rx_desc{ u64 addr; u16 len; u16 csum; u8 status; u8 err; u16 special; } __attribute__((packed));
+struct tx_desc{ u64 addr; u16 len; u8 cso; u8 cmd; u8 status; u8 css; u16 special; } __attribute__((packed));
+struct rx_desc* rx_ring = (struct rx_desc*)0x200000;
+struct tx_desc* tx_ring = (struct tx_desc*)0x201000;
+u8* rx_bufs = (u8*)0x202000;
+u8* tx_buf = (u8*)0x300000;
+volatile u32* e1000;
+void send_pkt(u8* data, int len, int idx){
+    for(int i=0;i<len;i++) tx_buf[i]=data[i];
+    tx_ring[idx].addr=(u64)(u32)tx_buf;
+    tx_ring[idx].len=len;
+    tx_ring[idx].cmd=0x0B;
+    tx_ring[idx].status=0;
+    e1000[0x3818/4]= (idx+1)%8;
+    while(!(tx_ring[idx].status & 1)){}
 }
-void putc(char c){
- if(c=='\n'){cursor=(cursor/80+1)*80; scroll(); return;}
- if(c=='\b'){if(cursor>0){cursor--; vga[cursor*2]=' '; } return;}
- vga[cursor*2]=c; vga[cursor*2+1]=color; cursor++; scroll();
-}
-void print(char* s){for(int i=0;s[i];i++) putc(s[i]);}
-void clear(){for(int i=0;i<80*25;i++){vga[i*2]=' '; vga[i*2+1]=0x07;} cursor=0;}
-
-int strcmp(char* a,char* b){int i=0;while(a[i]&&b[i]&&a[i]==b[i])i++;return a[i]-b[i];}
-int strncmp(char* a,char* b,int n){for(int i=0;i<n;i++){if(a[i]!=b[i])return a[i]-b[i]; if(!a[i])return 0;}return 0;}
-void strcpy(char* d,char* s){int i=0;while(s[i]){d[i]=s[i];i++;}d[i]=0;}
-
-void cmd_browser(char* url){
- clear();
- color=0x1F; print(" ");
- print(" Orvyn Browser 0.0.5 - [X] ");
- print(" URL: "); if(url[0]) print(url); else print("orvyn://home");
- print(" ");
- color=0x07;
- print("\n\n");
- if(!url[0] || strncmp(url,"home",4)==0){
-   print(" Welcome to OrvynOS Web\n");
-   print(" ----------------------\n");
-   print(" Try: browser help | browser about | browser google.com\n\n");
-   print(" [Orvyn Search] > Type something and press ENTER is not working yet\n");
- } else if(strncmp(url,"help",4)==0){
-   print(" Browser Commands:\n browser <url> - visit url\n browser home - homepage\n");
- } else if(strncmp(url,"about",5)==0){
-   print(" OrvynOS 0.0.5 Text Browser\n No TCP/IP yet, this is a mock renderer.\n Next: add RTL8139 driver.\n");
- } else {
-   print(" Loading "); print(url); print("...\n\n");
-   print(" +------------------------------------------------+\n");
-   print(" | This is a simulated page for "); print(url); print("\n");
-   print(" | Content would be rendered here in text mode. |\n");
-   print(" | No internet yet - OrvynOS is offline. |\n");
-   print(" +------------------------------------------------+\n");
- }
- print("\n Press 'q' to exit browser\n");
-}
-
-char input_buf[128];
-int input_len=0;
-
-void exec_cmd(){
- print("\n");
- if(input_len==0) return;
- input_buf[input_len]=0;
- if(strcmp(input_buf,"clear")==0){clear();}
- else if(strcmp(input_buf,"help")==0){
-   print("Commands: clear, help, echo <text>, browser <url>, about, reboot\n");
- }
- else if(strncmp(input_buf,"echo ",5)==0){print(input_buf+5); print("\n");}
- else if(strncmp(input_buf,"browser",7)==0){
-   char* url=input_buf+7; while(*url==' ')url++;
-   char c=0; int waiting=1;
-   cmd_browser(url);
-   while(waiting){
-     if(inb(0x64)&1){
-       unsigned char sc=inb(0x60);
-       if(sc==0x10) waiting=0; // q
-     }
-   }
-   clear();
- }
- else if(strcmp(input_buf,"about")==0){print("OrvynOS 0.0.4 -> 0.0.5 by Gabriel\n");}
- else if(strcmp(input_buf,"reboot")==0){outb(0x64,0xFE); while(1);}
- else {print("Unknown: "); print(input_buf); print("\n");}
-}
-
 void kernel_main(){
- clear();
- color=0x0A; print("OrvynOS 0.0.5 [SHELL READY]\n"); color=0x07;
- print("Type help for commands\n\n> ");
- char map[128]={0,0,'1','2','3','4','5','6','7','8','9','0','-','=',0,0,'q','w','e','r','t','y','u','i','o','p','[',']',0,0,'a','s','d','f','g','h','j','k','l',';','\'','`',0,'\\','z','x','c','v','b','n','m',',','.','/',0,0,0,' '};
- while(1){
-   if(inb(0x64)&1){
-     unsigned char sc=inb(0x60);
-     if(sc==0x1C){ // enter
-       exec_cmd(); print("\n> "); input_len=0;
-     } else if(sc==0x0E){ // backspace
-       if(input_len>0){input_len--; putc('\b');}
-     } else if(sc<128 && map[sc]){
-       if(input_len<127){input_buf[input_len++]=map[sc]; putc(map[sc]);}
-     }
-   }
- }
+    char* vga=(char*)0xB8000; for(int i=0;i<80*25;i++){ vga[i*2]=' '; vga[i*2+1]=0x07; }
+    print("OrvynOS 0.1.0 - V4.2 PONG FINAL",0,0x0A);
+    u32 bar=0;
+    for(int dev=0;dev<32;dev++){ outl(0xCF8,0x80000000|(dev<<11)); u32 id=inl(0xCFC); if(id==0xFFFFFFFF) continue; if((id&0xFFFF)==0x8086 && (id>>16)==0x100E){ outl(0xCF8,0x80000000|(dev<<11)|0x04); outl(0xCFC,inl(0xCFC)|0x07); outl(0xCF8,0x80000000|(dev<<11)|0x10); bar=inl(0xCFC)&~0xF; break; } }
+    if(!bar){ print("No e1000",1,0x0C); while(1){} }
+    e1000=(volatile u32*)bar;
+    e1000[0]|=0x04000000; for(int i=0;i<100000;i++) __asm__ volatile("nop");
+    for(int i=0;i<32;i++){ rx_ring[i].addr=(u64)(u32)(rx_bufs+i*2048); rx_ring[i].status=0; }
+    e1000[0x2800/4]=(u32)rx_ring; e1000[0x2804/4]=0; e1000[0x2808/4]=32*16; e1000[0x2810/4]=0; e1000[0x2818/4]=31;
+    e1000[0x100/4]=0x00008002;
+    for(int i=0;i<8;i++){ tx_ring[i].addr=0; tx_ring[i].status=1; tx_ring[i].len=0; }
+    e1000[0x3800/4]=(u32)tx_ring; e1000[0x3804/4]=0; e1000[0x3808/4]=8*16; e1000[0x3810/4]=0; e1000[0x3818/4]=0;
+    e1000[0x400/4]=0x0000000A | (1<<1) | (1<<3);
+    u8 mymac[6]={0x52,0x54,0x00,0x12,0x34,0x56};
+    u8 gw[6]={0x52,0x55,0x0A,0x00,0x02,0x02};
+    u8 pkt[60]={0}; for(int i=0;i<6;i++) pkt[i]=gw[i]; for(int i=0;i<6;i++) pkt[6+i]=mymac[i]; pkt[12]=0x08; pkt[13]=0x00;
+    pkt[14]=0x45; pkt[15]=0; pkt[16]=0; pkt[17]=0x1C; pkt[18]=0; pkt[19]=1; pkt[20]=0; pkt[21]=0; pkt[22]=64; pkt[23]=1; pkt[24]=0; pkt[25]=0;
+    pkt[26]=10; pkt[27]=0; pkt[28]=2; pkt[29]=15; pkt[30]=10; pkt[31]=0; pkt[32]=2; pkt[33]=2;
+    u16 ip_c=checksum(&pkt[14],20); pkt[24]=ip_c>>8; pkt[25]=ip_c&0xFF;
+    pkt[34]=8; pkt[35]=0; pkt[36]=0; pkt[37]=0; pkt[38]=0x12; pkt[39]=0x34; pkt[40]=0; pkt[41]=1;
+    u16 ic_c=checksum(&pkt[34],8); pkt[36]=ic_c>>8; pkt[37]=ic_c&0xFF;
+    print("Enviando PING a 10.0.2.2...",1,0x07);
+    send_pkt(pkt,42,0);
+    print("TX OK! Esperando...",2,0x0A);
+    int rx_idx=0;
+    while(1){
+        if(rx_ring[rx_idx].status & 1){
+            u8* eth = rx_bufs + rx_idx*2048;
+            u16 et = (eth[12]<<8)|eth[13];
+            if(et==0x0806){
+                print("ARP reply OK, reenviando PING",3,0x0E);
+                u8 rep[42]={0}; for(int i=0;i<6;i++) rep[i]=eth[6+i]; for(int i=0;i<6;i++) rep[6+i]=mymac[i]; rep[12]=0x08; rep[13]=0x06;
+                rep[14]=0; rep[15]=1; rep[16]=0x08; rep[17]=0; rep[18]=6; rep[19]=4; rep[20]=0; rep[21]=2;
+                for(int i=0;i<6;i++) rep[22+i]=mymac[i]; rep[28]=10; rep[29]=0; rep[30]=2; rep[31]=15;
+                for(int i=0;i<6;i++) rep[32+i]=eth[6+i]; rep[38]=10; rep[39]=0; rep[40]=2; rep[41]=2;
+                send_pkt(rep,42,1);
+                for(volatile int d=0; d<8000000; d++) __asm__ volatile("nop");
+                send_pkt(pkt,42,0);
+                print("PING reenviado!",4,0x07);
+            } else if(et==0x0800 && eth[23]==1 && eth[34]==0){
+                print("PONG RECIBIDO DE 10.0.2.2!",5,0x0A);
+                print("[OK] ORVYNOS ONLINE! 0.1.0",6,0x0C);
+                print("CINE WEON",7,0x0E);
+                break;
+            }
+            rx_ring[rx_idx].status=0;
+            rx_idx=(rx_idx+1)%32;
+            e1000[0x2818/4]= (rx_idx+31)%32;
+        }
+    }
+    while(1){}
 }
