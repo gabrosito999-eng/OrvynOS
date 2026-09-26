@@ -1,6 +1,5 @@
-#define FS_MAX_FILES 16
-#define FS_MAX_NAME 32
-#define FS_MAX_DATA 1024
+#ifndef FS_H
+#define FS_H
 
 typedef struct {
     char name[32];
@@ -10,8 +9,9 @@ typedef struct {
 } file_t;
 
 void fs_init();
-int fs_create(char* n);
-int fs_write(char* n, char* d);
-int fs_read(char* n, char* b);
-int fs_delete(char* n);
+int fs_create(char* name);
 void fs_list();
+void fs_read(char* name);
+int fs_write(char* name, char* data);
+
+#endif

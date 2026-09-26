@@ -1,12 +1,97 @@
+// OrvynOS 0.1.6 - fs.c COMPLETO CINE++
 #include "fs.h"
-extern void print(char*); extern void print_int(int);
-int sl2(char* s){int i=0; while(s[i]) i++; return i;}
-int sc2(char* a,char* b){int i=0; while(a[i]&&b[i]&&a[i]==b[i]) i++; return a[i]-b[i];}
-void scpy2(char* d,char* s){int i=0; while(s[i]){d[i]=s[i]; i++;} d[i]=0;}
+
 file_t files[16];
-void fs_init(){for(int i=0;i<16;i++) files[i].used=0;}
-int fs_create(char* n){for(int i=0;i<16;i++) if(!files[i].used){scpy2(files[i].name,n); files[i].size=0; files[i].used=1; files[i].data[0]=0; return 0;} return -1;}
-int fs_write(char* n,char* d){for(int i=0;i<16;i++) if(files[i].used&&sc2(files[i].name,n)==0){scpy2(files[i].data,d); files[i].size=sl2(d); return 0;} fs_create(n); return fs_write(n,d);}
-int fs_read(char* n,char* b){for(int i=0;i<16;i++) if(files[i].used&&sc2(files[i].name,n)==0){scpy2(b,files[i].data); return files[i].size;} return -1;}
-int fs_delete(char* n){for(int i=0;i<16;i++) if(files[i].used&&sc2(files[i].name,n)==0){files[i].used=0; return 0;} return -1;}
-void fs_list(){print("Files:\n"); int e=1; for(int i=0;i<16;i++) if(files[i].used){e=0; print(" - "); print(files[i].name); print("\n");} if(e) print(" (empty)\n");}
+int file_count = 0;
+
+void fs_init(){
+    for(int i=0;i<16;i++){
+        files[i].used = 0;
+        files[i].size = 0;
+        for(int j=0;j<32;j++) files[i].name[j]=0;
+        for(int j=0;j<1024;j++) files[i].data[j]=0;
+    }
+    file_count = 0;
+}
+
+int fs_create(char* name){
+    if(file_count >= 16) return -1;
+    for(int i=0;i<16;i++){
+        if(!files[i].used){
+            files[i].used = 1;
+            int j=0;
+            while(name[j] && j<31){ files[i].name[j]=name[j]; j++; }
+            files[i].name[j]=0;
+            files[i].size = 0;
+            file_count++;
+            return i;
+        }
+    }
+    return -1;
+}
+
+// interno para print - lo usa kernel.c
+extern void print(char* s);
+void fs_list(){
+    print("Files:\n");
+    int found=0;
+    for(int i=0;i<16;i++){
+        if(files[i].used){
+            print(" - ");
+            print(files[i].name);
+            print("\n");
+            found=1;
+        }
+    }
+    if(!found) print(" (no files)\n");
+}
+
+void fs_read(char* name){
+    for(int i=0;i<16;i++){
+        if(files[i].used){
+            int match=1;
+            int j=0;
+            while(name[j] && files[i].name[j]){
+                if(name[j]!=files[i].name[j]){ match=0; break; }
+                j++;
+            }
+            if(name[j]!=files[i].name[j]) match=0;
+            if(match){
+                if(files[i].size==0){
+                    print("[empty file: ");
+                    print(files[i].name);
+                    print("]\n");
+                } else {
+                    print(files[i].data);
+                    print("\n");
+                }
+                return;
+            }
+        }
+    }
+    print("File not found: ");
+    print(name);
+    print("\n");
+}
+
+int fs_write(char* name, char* data){
+    for(int i=0;i<16;i++){
+        if(files[i].used){
+            int match=1;
+            int j=0;
+            while(name[j] && files[i].name[j]){
+                if(name[j]!=files[i].name[j]){ match=0; break; }
+                j++;
+            }
+            if(name[j]!=files[i].name[j]) match=0;
+            if(match){
+                int k=0;
+                while(data[k] && k<1023){ files[i].data[k]=data[k]; k++; }
+                files[i].data[k]=0;
+                files[i].size=k;
+                return 0;
+            }
+        }
+    }
+    return -1;
+}

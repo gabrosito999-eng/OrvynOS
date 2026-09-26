@@ -1,29 +1,23 @@
-; OrvynOS boot.s - NASM version
-MBALIGN  equ  1<<0
-MEMINFO  equ  1<<1
-FLAGS    equ  MBALIGN | MEMINFO
-MAGIC    equ  0x1BADB002
-CHECKSUM equ -(MAGIC + FLAGS)
+.section .multiboot
+.align 4
+.long 0x1BADB002
+.long 0x00000000
+.long -(0x1BADB002)
 
-section .multiboot
-align 4
-    dd MAGIC
-    dd FLAGS
-    dd CHECKSUM
-
-section .text
-global _start
-extern kernel_main
+.section .text
+.global _start
+.type _start, @function
 _start:
-    mov esp, stack_top
+    mov $stack_top, %esp
     call kernel_main
     cli
-.hang:
-    hlt
-    jmp .hang
+1:  hlt
+    jmp 1b
 
-section .bss
-align 16
+.section .bss
+.align 16
 stack_bottom:
-    resb 16384
+.skip 16384
 stack_top:
+
+.section .note.GNU-stack,"",@progbits
