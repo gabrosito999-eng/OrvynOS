@@ -1,4 +1,4 @@
-// OrvynOS 0.1.4 - Kaira FIXED - kernel.c modular (usa fs.c aparte)
+// OrvynOS 0.1.5 - Kaira DESKTOP - kernel.c modular (usa fs.c aparte)
 typedef unsigned char u8; typedef unsigned short u16; typedef unsigned int u32; typedef unsigned long long u64;
 static inline void outb(u16 p,u8 v){__asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p));}
 static inline u8 inb(u16 p){u8 r;__asm__ volatile("inb %1,%0":"=a"(r):"Nd"(p));return r;}
@@ -7,7 +7,9 @@ static inline u32 inl(u16 p){u32 r;__asm__ volatile("inl %1,%0":"=a"(r):"Nd"(p))
 
 static u16* vga=(u16*)0xB8000; static int cx=0,cy=0;
 void clear(){for(int i=0;i<80*25;i++) vga[i]=0x0F00|32; cx=0;cy=0;}
+void clear_color(u8 color){for(int i=0;i<80*25;i++) vga[i]=(color<<8)|32; cx=0;cy=0;}
 void print(char* s){for(int i=0;s[i];i++){if(s[i]=='\n'){cx=0;cy++; if(cy>=25) clear(); continue;} vga[cy*80+cx]=0x0F00|s[i]; cx++; if(cx>=80){cx=0;cy++; if(cy>=25) clear();}}}
+void print_at(int x,int y,char* s,u8 col){for(int i=0;s[i];i++){if(x+i<80) vga[(y)*80+(x+i)]=(col<<8)|s[i];}}
 void print_int(int n){if(n==0){print("0"); return;} char b[12]; int i=0; if(n<0){print("-"); n=-n;} while(n>0){b[i++]='0'+(n%10); n/=10;} for(int j=i-1;j>=0;j--){char t[2]={b[j],0}; print(t);}}
 void print_hex_byte(u8 v){char* h="0123456789ABCDEF"; char o[3]={h[(v>>4)&0xF],h[v&0xF],0}; print(o);}
 int starts_with(char* s,char* p){int i=0; while(p[i]){if(s[i]!=p[i]) return 0; i++;} return 1;}
@@ -15,6 +17,7 @@ int streql(char* a,char* b){int i=0; while(a[i]&&b[i]){if(a[i]!=b[i]) return 0; 
 u16 iphdr_csum(u8* d,int l){u32 s=0; for(int i=0;i<l;i+=2) s+=(d[i]<<8)+(i+1<l?d[i+1]:0); while(s>>16) s=(s&0xFFFF)+(s>>16); return (~s)&0xFFFF;}
 
 #include "fs.h"
+extern file_t files[16];
 
 struct rx_desc{ u64 addr; u16 len; u16 csum; u8 status; u8 err; u16 special; } __attribute__((packed));
 struct tx_desc{ u64 addr; u16 len; u8 cso; u8 cmd; u8 status; u8 css; u16 special; } __attribute__((packed));
@@ -29,6 +32,60 @@ char getc(){while(1){if(!(inb(0x64)&1)) continue; u8 sc=inb(0x60); if(sc==0x1C) 
 void do_mac(){if(!e1000_found){print("No e1000\n"); return;} print("MAC: "); for(int i=0;i<6;i++){print_hex_byte(mymac[i]); if(i<5) print(":");} print("\n");}
 void do_ping_real(){if(!e1000_found){print("No e1000\n"); return;} print("PING 10.0.2.2 (REAL)...\n"); u8 gw[6]={0x52,0x55,0x0A,0x00,0x02,0x02}; u8 pkt[60]={0}; for(int i=0;i<6;i++) pkt[i]=gw[i]; for(int i=0;i<6;i++) pkt[6+i]=mymac[i]; pkt[12]=0x08; pkt[13]=0; pkt[14]=0x45; pkt[15]=0; pkt[16]=0; pkt[17]=0x1C; pkt[18]=0; pkt[19]=1; pkt[20]=0; pkt[21]=0; pkt[22]=64; pkt[23]=1; pkt[26]=10; pkt[27]=0; pkt[28]=2; pkt[29]=15; pkt[30]=10; pkt[31]=0; pkt[32]=2; pkt[33]=2; u16 ipc=iphdr_csum(&pkt[14],20); pkt[24]=ipc>>8; pkt[25]=ipc&0xFF; pkt[34]=8; pkt[35]=0; pkt[38]=0x12; pkt[39]=0x34; pkt[40]=0; pkt[41]=1; u16 icc=iphdr_csum(&pkt[34],8); pkt[36]=icc>>8; pkt[37]=icc&0xFF; e1000_send(pkt,42); int rx_tail=0; int tries=0; while(tries<5000000){if(rx_ring[rx_tail].status & 1){u8* eth=rx_bufs+rx_tail*2048; u16 type=(eth[12]<<8)|eth[13]; if(type==0x0800 && eth[23]==1 && eth[34]==0){print("[OK] PONG REAL 10.0.2.2!\n"); rx_ring[rx_tail].status=0; e1000[0x2818/4]=(rx_tail+31)%32; return;} if(type==0x0806){u8 rep[42]={0}; for(int i=0;i<6;i++) rep[i]=eth[6+i]; for(int i=0;i<6;i++) rep[6+i]=mymac[i]; rep[12]=0x08; rep[13]=0x06; rep[14]=0; rep[15]=1; rep[16]=0x08; rep[17]=0; rep[18]=6; rep[19]=4; rep[20]=0; rep[21]=2; for(int i=0;i<6;i++) rep[22+i]=mymac[i]; rep[28]=10; rep[29]=0; rep[30]=2; rep[31]=15; for(int i=0;i<6;i++) rep[32+i]=eth[6+i]; rep[38]=10; rep[39]=0; rep[40]=2; rep[41]=2; e1000_send(rep,42); for(volatile int k=0;k<10000;k++) __asm__ volatile("nop"); e1000_send(pkt,42);} rx_ring[rx_tail].status=0; rx_tail=(rx_tail+1)%32; e1000[0x2818/4]=(rx_tail+31)%32;} tries++;} print("Timeout\n");}
 
-void shell(){char buf[64]; int idx=0; char tmp[1024]; while(1){print("orvyn> "); idx=0; while(1){char c=getc(); if(c=='\n'){print("\n"); buf[idx]=0; break;} if(c=='\b'){if(idx>0){idx--; if(cx>0) cx--; vga[cy*80+cx]=0x0F00|32;} continue;} if(idx<63){buf[idx++]=c; char s[2]={c,0}; print(s);}} if(buf[0]==0) continue; if(streql(buf,"help")) print("help, about, clear, reboot, mac, ping, ls, cat, touch, rm, write, lew\n"); else if(streql(buf,"about")) print("OrvynOS 0.1.4 Kaira - FS + NET REAL\n"); else if(streql(buf,"clear")) clear(); else if(streql(buf,"mac")) do_mac(); else if(streql(buf,"ping")) do_ping_real(); else if(streql(buf,"ls")) fs_list(); else if(starts_with(buf,"cat ")){if(fs_read(buf+4,tmp)!=-1){print(tmp); print("\n");} else print("Not found\n");} else if(starts_with(buf,"touch ")){if(fs_create(buf+6)==0) print("Created\n"); else print("Full\n");} else if(starts_with(buf,"rm ")){if(fs_delete(buf+3)==0) print("Deleted\n"); else print("Not found\n");} else if(streql(buf,"reboot")){outb(0x64,0xFE); while(1){}} else if(streql(buf,"lew")) print("Lewis - FS + NET REAL ready\n"); else{print("Unknown: "); print(buf); print("\n");}}}
+// ===== 0.1.5 DESKTOP =====
+int desktop_mode=0;
+void draw_box(int x,int y,int w,int h,u8 col){
+    for(int j=0;j<h;j++) for(int i=0;i<w;i++) if(x+i<80 && y+j<25) vga[(y+j)*80+(x+i)]=(col<<8)|32;
+}
+void draw_window(int x,int y,int w,int h,char* title){
+    draw_box(x,y,w,1,0x1F); print_at(x+2,y,title,0x1F);
+    draw_box(x,y+1,w,h-1,0x0F);
+    for(int i=0;i<w;i++){vga[(y+1)*80+x+i]=0x0F00|196; vga[(y+h-1)*80+x+i]=0x0F00|196;}
+    for(int j=0;j<h;j++){vga[(y+j)*80+x]=0x0F00|179; vga[(y+j)*80+x+w-1]=0x0F00|179;}
+    vga[(y)*80+x]=0x1F00|218; vga[(y)*80+x+w-1]=0x1F00|191;
+    vga[(y+h-1)*80+x]=0x0F00|192; vga[(y+h-1)*80+x+w-1]=0x0F00|217;
+}
+void desktop_loop();
 
-void kernel_main(){clear(); print("OrvynOS 0.1.4 Kaira - FS + NET REAL\n"); fs_init(); fs_create("readme.txt"); fs_write("readme.txt","OrvynFS ready - Lewis"); e1000_found=e1000_detect(); if(e1000_found){e1000_init_hw(); print("[OK] e1000 REAL\n[OK] FS READY\n");} else print("[WARN] e1000 not found - run with e1000\n"); shell();}
+void enter_desktop(){
+    desktop_mode=1;
+    clear_color(0x1F);
+    draw_box(0,0,80,1,0x9F); print_at(1,0,"OrvynOS 0.1.5 - Kaira Desktop [ESC to shell]",0x9F);
+    draw_box(0,24,80,1,0x9F); print_at(1,24,"[1]Terminal [2]Files [3]Net [4]About",0x9F);
+
+    draw_window(2,3,20,10,"Apps");
+    print_at(4,5,"1. Terminal",0x0F);
+    print_at(4,6,"2. Files",0x0F);
+    print_at(4,7,"3. Net Tools",0x0F);
+    print_at(4,8,"4. About",0x0F);
+
+    draw_window(26,3,50,12,"Welcome");
+    print_at(28,5,"Welcome to Kaira Desktop!",0x0F);
+    print_at(28,7,"This is 0.1.5 revolutionary",0x0F);
+    print_at(28,8,"Shell is now an app.",0x0F);
+    print_at(28,10,"Press 1-4 to open apps",0x0F);
+    print_at(28,11,"ESC to return to shell",0x0F);
+
+    desktop_loop();
+}
+
+void app_terminal(); void app_files(); void app_net(); void app_about();
+
+void desktop_loop(){
+    while(desktop_mode){
+        char c=getc();
+        if(c==27){desktop_mode=0; clear(); print("OrvynOS 0.1.5 Kaira - FS + NET + DESKTOP\n"); return;}
+        if(c=='1') app_terminal();
+        if(c=='2') app_files();
+        if(c=='3') app_net();
+        if(c=='4') app_about();
+    }
+}
+void app_terminal(){draw_window(26,3,50,12,"Terminal App"); print_at(28,5,"Launching Kaira Shell...",0x0F); for(volatile int i=0;i<20000000;i++) __asm__ volatile("nop"); desktop_mode=0; clear(); print("Kaira Shell (App Mode) - type 'exit' to return\n");}
+void app_files(){draw_window(30,5,40,10,"Files App"); char* p=""; print_at(32,7,"Files:",0x0F); int yy=8; for(int i=0;i<16;i++) if(files[i].used){print_at(32,yy,files[i].name,0x0F); yy++;} if(yy==8) print_at(32,8,"(empty)",0x0F);}
+void app_net(){draw_window(30,5,40,10,"Net Tools App"); print_at(32,7,"MAC:",0x0F); if(e1000_found){char b[20]; int idx=0; for(int i=0;i<6;i++){char* h="0123456789ABCDEF"; b[idx++]=h[(mymac[i]>>4)&0xF]; b[idx++]=h[mymac[i]&0xF]; if(i<5) b[idx++]=':';} b[idx]=0; print_at(32,8,b,0x0F);} else print_at(32,8,"No e1000",0x0F); print_at(32,9,"[P] Ping 10.0.2.2",0x0F);}
+void app_about(){draw_window(30,5,40,8,"About"); print_at(32,7,"OrvynOS 0.1.5",0x0F); print_at(32,8,"Kaira Desktop",0x0F); print_at(32,9,"Lewis - FS+NET+GUI",0x0F);}
+
+void shell(){char buf[64]; int idx=0; char tmp[1024]; while(1){if(!desktop_mode) print("orvyn> "); idx=0; while(1){char c=getc(); if(desktop_mode){shell(); return;} if(c=='\n'){print("\n"); buf[idx]=0; break;} if(c=='\b'){if(idx>0){idx--; if(cx>0) cx--; vga[cy*80+cx]=0x0F00|32;} continue;} if(c==27 &&!desktop_mode){enter_desktop(); idx=0; break;} if(idx<63){buf[idx++]=c; char s[2]={c,0}; print(s);}} if(buf[0]==0) continue; if(streql(buf,"help")) print("help, about, clear, reboot, mac, ping, ls, cat, touch, rm, write, lew, desktop, boot desktop, exit\n"); else if(streql(buf,"about")) print("OrvynOS 0.1.5 Kaira Desktop - FS + NET + GUI\n"); else if(streql(buf,"clear")) clear(); else if(streql(buf,"mac")) do_mac(); else if(streql(buf,"ping")) do_ping_real(); else if(streql(buf,"ls")) fs_list(); else if(starts_with(buf,"cat ")){if(fs_read(buf+4,tmp)!=-1){print(tmp); print("\n");} else print("Not found\n");} else if(starts_with(buf,"touch ")){if(fs_create(buf+6)==0) print("Created\n"); else print("Full\n");} else if(starts_with(buf,"rm ")){if(fs_delete(buf+3)==0) print("Deleted\n"); else print("Not found\n");} else if(streql(buf,"reboot")){outb(0x64,0xFE); while(1){}} else if(streql(buf,"lew")) print("Lewis - FS + NET + DESKTOP ready\n"); else if(streql(buf,"desktop")||streql(buf,"boot desktop")) enter_desktop(); else if(streql(buf,"exit")){if(desktop_mode){desktop_mode=0; clear();} else print("Use desktop to enter GUI\n");} else{print("Unknown: "); print(buf); print("\n");}}}
+
+void kernel_main(){clear(); print("OrvynOS 0.1.5 Kaira Desktop - FS + NET + GUI\n"); fs_init(); fs_create("readme.txt"); fs_write("readme.txt","OrvynFS ready - Lewis Desktop"); e1000_found=e1000_detect(); if(e1000_found){e1000_init_hw(); print("[OK] e1000 REAL\n[OK] FS READY\n[OK] DESKTOP READY -> type 'desktop'\n");} else print("[WARN] e1000 not found - run with e1000\n[OK] DESKTOP READY -> type 'desktop'\n"); shell();}
